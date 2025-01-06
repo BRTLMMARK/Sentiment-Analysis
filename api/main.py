@@ -1,8 +1,11 @@
+from fastapi import FastAPI
+from typing import Dict
 import requests
 import csv
-from collections import defaultdict
 
-# Google Sheets URLs (CSV export links)
+app = FastAPI()
+
+# Google Sheets URLs
 sheets = {
     "PHQ-9": "https://docs.google.com/spreadsheets/d/1D312sgbt_nOsT668iaUrccAzQ3oByUT0peXS8LYL5wg/export?format=csv",
     "ASQ": "https://docs.google.com/spreadsheets/d/1TiU8sv5cJg30ZL3fqPSmBwJJbB7h2xv1NNbKo4ZIydU/export?format=csv",
@@ -15,37 +18,10 @@ response_mapping = {
     "Several Days": 1,
     "More than half the days": 2,
     "Nearly every day": 3,
-    "Mildly, but it didn't bother me much": 1,
-    "Moderately - it wasn't pleasant at times": 2,
-    "Severely - it bothered me a lot": 3,
 }
 
-# Interpretation levels for each tool
-interpretation_levels = {
-    "PHQ-9": [
-        "Minimal or none (0-4)",
-        "Mild (5-9)",
-        "Moderate (10-14)",
-        "Moderately severe (15-19)",
-        "Severe (20-27)",
-    ],
-    "ASQ": ["No Risk", "Low Risk", "Moderate Risk", "High Risk", "Critical Risk"],
-    "BAI": [
-        "Low Anxiety (0-21)",
-        "Moderate Anxiety (22-35)",
-        "Severe Anxiety (36+)",
-    ],
-}
-
-# Tool recommendations based on severe/critical scores
-recommendation_map = {
-    "PHQ-9": "Depression",
-    "ASQ": "Self-Harm, Suicide",
-    "BAI": "Anxiety",
-}
-
-# Function to calculate interpretations
-def get_interpretation(tool, score):
+# Interpretation logic
+def get_interpretation(tool: str, score: int) -> str:
     if tool == "PHQ-9":
         if score <= 4:
             return "Minimal or none (0-4)"
@@ -75,55 +51,24 @@ def get_interpretation(tool, score):
             return "Moderate Anxiety (22-35)"
         else:
             return "Severe Anxiety (36+)"
+    return "Unknown"
 
-# Fetch and process data for a specific client
-def analyze_client(client_name):
-    results = defaultdict(dict)  # Store scores and interpretations per respondent
-    client_found = False  # Flag to check if client is found
-
+@app.get("/results/{client_name}")
+async def analyze_client(client_name: str) -> Dict[str, Dict[str, str]]:
+    results = {}
     for tool, url in sheets.items():
         response = requests.get(url)
         response.raise_for_status()
-        data = response.text.splitlines()
+        data = csv.reader(response.text.splitlines())
+        header = next(data)
 
-        reader = csv.reader(data)
-        header = next(reader)  # Skip header row
-
-        for row in reader:
+        for row in data:
             name = row[-1].strip()  # Name is in the last column
             if name.lower() == client_name.lower():
-                client_found = True
-                responses = row[1:-2]  # Adjust columns for tool responses
+                responses = row[1:-2]  # Adjust columns based on CSV format
                 total_score = sum(response_mapping.get(r.strip(), 0) for r in responses)
-                interpretation = get_interpretation(tool, total_score)
-
-                # Store results for the client
                 results[tool] = {
                     "score": total_score,
-                    "interpretation": interpretation,
+                    "interpretation": get_interpretation(tool, total_score),
                 }
-
-    if not client_found:
-        print(f"Error: Client '{client_name}' not found.")
-        return
-
-    # Generate recommendations
-    recommendations = [
-        recommendation_map[tool]
-        for tool, result in results.items()
-        if "Severe" in result["interpretation"] or "Critical" in result["interpretation"]
-    ]
-
-    # Output results
-    print(f"\nResults for {client_name}:")
-    for tool, result in results.items():
-        print(f"{tool}: Score = {result['score']}, Interpretation = {result['interpretation']}")
-
-    print("\nRecommendations:")
-    if recommendations:
-        print(", ".join(recommendations))
-    else:
-        print("No additional tools needed.")
-
-# Example usage
-analyze_client("Mark Joseph Bartolome")  # Replace with the client's name
+    return results
